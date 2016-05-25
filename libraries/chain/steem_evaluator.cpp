@@ -2,8 +2,22 @@
 #include <steemit/chain/steem_evaluator.hpp>
 #include <steemit/chain/steem_objects.hpp>
 
-#ifdef STEEM_DIFF_MATCH_PATCH
+#ifndef IS_LOW_MEM
 #include <diff_match_patch.h>
+#include <boost/locale/encoding_utf.hpp>
+
+using boost::locale::conv::utf_to_utf;
+
+std::wstring utf8_to_wstring(const std::string& str)
+{
+    return utf_to_utf<wchar_t>(str.c_str(), str.c_str() + str.size());
+}
+
+std::string wstring_to_utf8(const std::wstring& str)
+{
+    return utf_to_utf<char>(str.c_str(), str.c_str() + str.size());
+}
+
 #endif
 
 #include <fc/uint128.hpp>
@@ -227,19 +241,19 @@ void comment_evaluator::do_apply( const comment_operation& o )
       id = new_comment.id;
 
 /// this loop can be skiped for validate-only nodes as it is merely gathering stats for indicies
-#ifndef IS_LOW_MEM
       auto now = db().head_block_time();
       while( parent ) {
          db().modify( *parent, [&]( comment_object& p ){
             p.children++;
             p.active = now;
          });
+#ifndef IS_LOW_MEM
          if( parent->parent_author.size() )
             parent = &db().get_comment( parent->parent_author, parent->parent_permlink );
          else
+#endif
             parent = nullptr;
       }
-#endif
 
    }
    else // start edit case
@@ -270,27 +284,23 @@ void comment_evaluator::do_apply( const comment_operation& o )
            if( o.json_metadata.size() ) com.json_metadata = o.json_metadata;
 
            if( o.body.size() ) {
-              #ifdef STEEM_DIFF_MATCH_PATCH
               try {
-               diff_match_patch dmp;
-               auto patch = dmp.patch_fromText( QString::fromStdString(o.body) );
+               diff_match_patch<std::wstring> dmp;
+               auto patch = dmp.patch_fromText( utf8_to_wstring(o.body) );
                if( patch.size() ) {
-                  auto first = QString::fromStdString( com.body );
-                  auto result = dmp.patch_apply( patch, first );
-                  com.body = result.first.toStdString();
+                  auto result = dmp.patch_apply( patch, utf8_to_wstring(com.body) );
+                  auto patched_body = wstring_to_utf8(result.first);
+                  if( !fc::is_utf8( patched_body ) ) {
+                     idump(("invalid utf8")(patched_body));
+                     com.body = fc::prune_invalid_utf8(patched_body);
+                  } else { com.body = patched_body; }
                }
                else { // replace
                   com.body = o.body;
                }
-              } catch ( const QString& err ) {
-                  //wlog( "exception thrown while applying patch: \n   ${e}", ("e",err.toStdString()) );
-                  com.body = o.body;
               } catch ( ... ) {
                   com.body = o.body;
               }
-              #else
-               com.body = o.body;
-              #endif
            }
          #endif
 

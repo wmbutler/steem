@@ -716,15 +716,22 @@ signed_block database::_generate_block(
    pending_block.witness = witness_owner;
    if( has_hardfork( STEEMIT_HARDFORK_0_5__54 ) )
    {
-      if( get_witness( witness_owner ).running_version != STEEMIT_BLOCKCHAIN_VERSION ) // TODO: Hardfork requirement can be removed after hardfork time
+      const auto& witness = get_witness( witness_owner );
+
+      if( witness.running_version != STEEMIT_BLOCKCHAIN_VERSION ) // TODO: Hardfork requirement can be removed after hardfork time
          pending_block.extensions.insert( future_extensions( STEEMIT_BLOCKCHAIN_VERSION ) );
 
       const auto& hfp = hardfork_property_id_type()( *this );
 
-      if( STEEMIT_NUM_HARDFORKS > hfp.last_hardfork )
+      if( STEEMIT_NUM_HARDFORKS > hfp.last_hardfork ) // Binary knows of a new hardfork
       {
          pending_block.extensions.insert( future_extensions( _hardfork_versions[ hfp.last_hardfork + 1 ] ) );
          pending_block.extensions.insert( future_extensions( _hardfork_times[ hfp.last_hardfork + 1 ] ) );
+      }
+      else if( witness.hardfork_version_vote > _hardfork_versions[ hfp.last_hardfork ] ) // Don't know about the new hardfork and have previously voted for it
+      {
+         pending_block.extensions.insert( future_extensions( _hardfork_versions[ hfp.last_hardfork ] ) );
+         pending_block.extensions.insert( future_extensions( _hardfork_times[ hfp.last_hardfork ] ) );
       }
    }
 
@@ -779,7 +786,20 @@ void database::push_applied_operation( const operation& op )
    obj.op_in_trx    = _current_op_in_trx;
    obj.virtual_op   = _current_virtual_op++;
    obj.op           = op;
-   on_applied_operation( obj );
+   on_applied_operation( obj ); ///< TODO: deprecate
+   pre_apply_operation( obj );
+}
+
+
+void database::notify_post_apply_operation( const operation& op ) {
+   operation_object obj;
+   obj.trx_id       = _current_trx_id;
+   obj.block        = _current_block_num;
+   obj.trx_in_block = _current_trx_in_block;
+   obj.op_in_trx    = _current_op_in_trx;
+   obj.virtual_op   = _current_virtual_op;
+   obj.op           = op;
+   post_apply_operation( obj );
 }
 
 string database::get_scheduled_witness( uint32_t slot_num )const
@@ -981,21 +1001,16 @@ void database::update_witness_schedule4() {
       for( uint32_t i = 0; i < wso.current_shuffled_witnesses.size(); i++ )
       {
          auto witness = get_witness( wso.current_shuffled_witnesses[ i ] );
+         if( witness_versions.find( witness.running_version ) == witness_versions.end() )
+            witness_versions[ witness.running_version ] = 1;
+         else
+            witness_versions[ witness.running_version ] += 1;
 
-         if( witness.pow_worker == 0 && witness.running_version > majority_version )
-         {
-            if( witness_versions.find( witness.running_version ) == witness_versions.end() )
-               witness_versions[ witness.running_version ] = 1;
-            else
-               witness_versions[ witness.running_version ] += 1;
-
-            auto version_vote = std::make_tuple( witness.hardfork_version_vote, witness.hardfork_time_vote );
-
-            if( hardfork_version_votes.find( version_vote ) == hardfork_version_votes.end() )
-               hardfork_version_votes[ version_vote ] = 1;
-            else
-               hardfork_version_votes[ version_vote ] += 1;
-         }
+         auto version_vote = std::make_tuple( witness.hardfork_version_vote, witness.hardfork_time_vote );
+         if( hardfork_version_votes.find( version_vote ) == hardfork_version_votes.end() )
+            hardfork_version_votes[ version_vote ] = 1;
+         else
+            hardfork_version_votes[ version_vote ] += 1;
       }
 
       int witnesses_on_version = 0;
@@ -1333,8 +1348,6 @@ void database::adjust_rshares2( const comment_object& c, fc::uint128_t old_rshar
    modify( c, [&](comment_object& comment ){
       comment.children_rshares2 -= old_rshares2;
       comment.children_rshares2 += new_rshares2;
-      if( new_rshares2 > old_rshares2 ) /// down't update active index for down votes
-         comment.active = head_block_time();
    });
    if( c.depth ) {
       adjust_rshares2( get_comment( c.parent_author, c.parent_permlink ), old_rshares2, new_rshares2 );
@@ -1525,9 +1538,13 @@ void database::process_comment_cashout() {
             unclaimed = pay_curators( cur, curator_rewards );
             cashout_comment_helper( cur, cur, asset( to_vesting, STEEM_SYMBOL ), asset( to_sbd, STEEM_SYMBOL ) );
 
+            auto total_payout = asset(reward_tokens - unclaimed ,STEEM_SYMBOL) * median_price;
+
             modify( cat, [&]( category_object& c ) {
-               c.total_payouts += asset(reward_tokens - unclaimed ,STEEM_SYMBOL) * median_price;
+               c.total_payouts += total_payout;
             });
+
+            notify_post_apply_operation( comment_payout_operation( cur.author, cur.permlink, total_payout ) );
          }
          fc::uint128_t old_rshares2(cur.net_rshares.value);
          old_rshares2 *= old_rshares2;
@@ -2243,8 +2260,9 @@ void database::apply_operation(transaction_evaluation_state& eval_state, const o
    unique_ptr<op_evaluator>& eval = _operation_evaluators[ u_which ];
    if( !eval )
       assert( "No registered evaluator for this operation" && false );
-   eval->evaluate( eval_state, op, true );
    push_applied_operation( op );
+   eval->evaluate( eval_state, op, true );
+   notify_post_apply_operation( op );
 } FC_CAPTURE_AND_RETHROW(  ) }
 
 const witness_object& database::validate_block_header( uint32_t skip, const signed_block& next_block )const
@@ -2701,12 +2719,6 @@ void database::init_hardforks()
       FC_ASSERT( _hardfork_times[ hardforks.last_hardfork + 1 ] > head_block_time(), "Next hardfork takes place prior to head block time" );
 
    FC_ASSERT( _hardfork_versions[ hardforks.last_hardfork ] <= STEEMIT_BLOCKCHAIN_VERSION, "Blockchain version is older than last applied hardfork" );
-
-
-   for( int i = 0; i <= hardforks.last_hardfork; i++ )
-   {
-      FC_ASSERT( hardforks.processed_hardforks[ i ] == _hardfork_times[ i ], "Time of processed hardfork does not match hardfork configuration time" );
-   }
 }
 
 void database::reset_virtual_schedule_time() {
