@@ -66,6 +66,7 @@ class  tag_object : public abstract_object<tag_object> {
       int32_t            net_votes   = 0;
       int32_t            children    = 0;
       double             hot         = 0;
+      share_type         promotion   = 0;
 
       /**
        *  Used to track the total rshares^2 of all children, this is used for indexing purposes. A discussion
