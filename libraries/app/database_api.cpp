@@ -1072,10 +1072,12 @@ vector<discussion> database_api::get_discussions_by_cashout( const discussion_qu
 
    return get_discussions( query, tag, parent, tidx, tidx_itr, []( const comment_object& c ){ return c.children_rshares2 <= 0; } );
 }
+
 vector<discussion> database_api::get_discussions_by_payout( const discussion_query& query )const {
    vector<discussion> result;
    return result;
 }
+
 vector<discussion> database_api::get_discussions_by_votes( const discussion_query& query )const {
    query.validate();
    auto tag = fc::to_lower( query.tag );
@@ -1109,7 +1111,17 @@ vector<discussion> database_api::get_discussions_by_hot( const discussion_query&
    return get_discussions( query, tag, parent, tidx, tidx_itr, []( const comment_object& c ) { return c.net_rshares <= 0; } );
 }
 
+vector<discussion> database_api::get_discussions_by_promotion( const discussion_query& query )const
+{
+   query.validate();
+   auto tag = fc::to_lower( query.tag );
+   auto parent = get_parent( query );
 
+   const auto& tidx = my->_db.get_index_type<tags::tag_index>().indices().get<tags::by_promotion>();
+   auto tidx_itr = tidx.lower_bound( boost::make_tuple( tag ) );
+
+   return get_discussions( query, tag, parent, tidx, tidx_itr );
+}
 
 vector<category_object> database_api::get_trending_categories( string after, uint32_t limit )const {
    limit = std::min( limit, uint32_t(100) );

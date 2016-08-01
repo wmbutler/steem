@@ -94,6 +94,7 @@ struct by_parent_children; /// all top level posts with the most discussion (rep
 struct by_parent_hot;
 struct by_author_parent_created;  /// all blog posts by author with tag
 struct by_author_comment;
+struct by_promotion;
 struct by_comment;
 struct by_tag;
 
@@ -198,6 +199,14 @@ typedef multi_index_container<
                member<object, object_id_type, &object::id >
             >,
             composite_key_compare< std::less<string>, std::less<account_id_type>, std::greater< time_point_sec >, std::less< object_id_type > >
+      >,
+      ordered_unique< tag< by_promotion >,
+            composite_key< tag_object,
+               member< tag_object, string, &tag_object::tag >,
+               member< tag_object, share_type, &tag_object::promotion >,
+               member< object, object_id_type, &object::id >
+            >,
+            composite_key_compare< std::less< string >, std::greater< share_type >, std::less< object_id_type > >
       >
    >
 > tag_multi_index_type;

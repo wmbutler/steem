@@ -309,6 +309,7 @@ class database_api
       vector<discussion> get_discussions_by_votes( const discussion_query& query )const;
       vector<discussion> get_discussions_by_children( const discussion_query& query )const;
       vector<discussion> get_discussions_by_hot( const discussion_query& query )const;
+      vector<discussion> get_discussions_by_promotion( const discussion_query& query )const;
 
 
       ///@}
@@ -408,6 +409,7 @@ FC_API(steemit::app::database_api,
    (get_discussions_by_votes)
    (get_discussions_by_children)
    (get_discussions_by_hot)
+   (get_discussions_by_promotion)
 
    // Blocks and transactions
    (get_block_header)
